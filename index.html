@@ -26,7 +26,7 @@
         <div class="bg-slate-800 p-6 rounded-xl border border-slate-700 shadow-xl space-y-4">
             <label class="block text-sm font-semibold text-slate-300">Enter Play Store App Package ID or URL:</label>
             <div class="flex flex-col sm:flex-row gap-3">
-                <input type="text" id="appInput" placeholder="e.g. com.whatsapp or https://play.google.com/store/apps/details?id=com.whatsapp" 
+                <input type="text" id="appInput" placeholder="e.g. org.telegram.messenger or https://play.google.com/store/apps/details?id=org.telegram.messenger" 
                        class="flex-1 bg-slate-900 border border-slate-700 text-white rounded-lg px-4 py-3 focus:outline-none focus:border-blue-500">
                 <button onclick="fetchAppData()" id="fetchBtn" class="bg-blue-600 hover:bg-blue-500 text-white font-bold px-6 py-3 rounded-lg flex items-center justify-center transition">
                     <i class="fas fa-search mr-2"></i> Fetch App Details
@@ -36,12 +36,12 @@
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
                 <div>
                     <label class="block text-xs font-semibold text-slate-400 mb-1">Download Link (APK/Drive Link):</label>
-                    <input type="url" id="customDownloadLink" placeholder="https://your-download-link.com/file.apk" 
+                    <input type="url" id="customDownloadLink" placeholder="https://siomods.blogspot.com/search/label/Apps" 
                            class="w-full bg-slate-900 border border-slate-700 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500">
                 </div>
                 <div>
                     <label class="block text-xs font-semibold text-slate-400 mb-1">App Size (e.g. 45 MB):</label>
-                    <input type="text" id="customSize" placeholder="e.g. 50 MB (auto/manual)" 
+                    <input type="text" id="customSize" placeholder="e.g. 60 MB (auto/manual)" 
                            class="w-full bg-slate-900 border border-slate-700 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500">
                 </div>
             </div>
@@ -96,7 +96,6 @@
                 return;
             }
 
-            // Extract Package Name
             let packageName = inputVal;
             if (inputVal.includes('id=')) {
                 packageName = inputVal.split('id=')[1].split('&')[0];
@@ -105,110 +104,97 @@
             document.getElementById('loading').classList.remove('hidden');
             document.getElementById('resultSection').classList.add('hidden');
 
+            const playUrl = `https://play.google.com/store/apps/details?id=${packageName}&hl=en&gl=US`;
+
+            let appName = '', appLogo = '', developer = 'Verified Developer', rating = '4.5', installs = '100,000+', category = 'Android Application', shortDesc = '', screenshots = [];
+
             try {
-                const playUrl = `https://play.google.com/store/apps/details?id=${packageName}&hl=en&gl=US`;
-                
-                // Fallback APIs
-                const proxyUrls = [
-                    `https://api.allorigins.win/get?url=${encodeURIComponent(playUrl)}`,
-                    `https://corsproxy.io/?${encodeURIComponent(playUrl)}`
-                ];
+                // Method 1: Using Microlink API (Extremely reliable for Play Store open graph metadata)
+                const microRes = await fetch(`https://api.microlink.io/?url=${encodeURIComponent(playUrl)}`);
+                const microData = await microRes.json();
 
-                let htmlText = '';
-                for (let proxy of proxyUrls) {
-                    try {
-                        const res = await fetch(proxy);
-                        if (res.ok) {
-                            if (proxy.includes('allorigins')) {
-                                const json = await res.json();
-                                htmlText = json.contents;
-                            } else {
-                                htmlText = await res.text();
-                            }
-                            if (htmlText) break;
-                        }
-                    } catch (e) {
-                        console.warn("Proxy failed, trying next...", proxy);
+                if (microData.status === 'success' && microData.data) {
+                    const data = microData.data;
+                    appName = data.title ? data.title.replace(' - Apps on Google Play', '').replace(/['"]/g, '') : packageName;
+                    appLogo = data.image ? data.image.url : '';
+                    developer = data.publisher || 'Verified Developer';
+                    shortDesc = data.description || `Download ${appName} latest version for Android.`;
+                }
+
+                // Method 2: Fetch HTML for extra details (Screenshots & Rating) via Proxy
+                const htmlRes = await fetch(`https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(playUrl)}`);
+                if (htmlRes.ok) {
+                    const htmlText = await htmlRes.text();
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(htmlText, 'text/html');
+
+                    if (!appName || appName === packageName) {
+                        const titleMeta = doc.querySelector('meta[property="og:title"]');
+                        if (titleMeta) appName = titleMeta.getAttribute('content').replace(' - Apps on Google Play', '').replace(/['"]/g, '');
                     }
+                    if (!appLogo) {
+                        const imgMeta = doc.querySelector('meta[property="og:image"]');
+                        if (imgMeta) appLogo = imgMeta.getAttribute('content');
+                    }
+
+                    const ratingEl = doc.querySelector('div.TT9eB');
+                    if (ratingEl) rating = ratingEl.innerText;
+
+                    const installsEl = doc.querySelector('div.Cl29C');
+                    if (installsEl) installs = installsEl.innerText;
+
+                    const catEl = doc.querySelector('a[itemprop="genre"] span');
+                    if (catEl) category = catEl.innerText;
+
+                    const imgs = Array.from(doc.querySelectorAll('img[src*="ggpht.com"], img[src*="googleusercontent.com"]'));
+                    screenshots = imgs
+                        .map(i => i.src)
+                        .filter(s => !s.includes('sz=s') && !s.includes('lh3.googleusercontent.com/a'))
+                        .slice(0, 4);
                 }
-
-                if (!htmlText) {
-                    throw new Error("Could not load Play Store data");
-                }
-
-                // Parsing HTML to extract metadata
-                const parser = new DOMParser();
-                const doc = parser.parseFromString(htmlText, 'text/html');
-
-                const getMeta = (prop) => {
-                    const el = doc.querySelector(`meta[property="${prop}"]`) || doc.querySelector(`meta[name="${prop}"]`);
-                    return el ? el.getAttribute('content') : '';
-                };
-
-                // Helper to bypass Blogger referrer image blocking
-                const formatImageUrl = (url) => {
-                    if (!url) return 'https://via.placeholder.com/512';
-                    if (url.startsWith('//')) url = 'https:' + url;
-                    return `https://wsrv.nl/?url=${encodeURIComponent(url)}`;
-                };
-
-                // Extracted App Details
-                const rawAppName = getMeta('og:title') ? getMeta('og:title').replace(' - Apps on Google Play', '') : packageName;
-                const appName = rawAppName.replace(/['"]/g, '');
-                const rawLogo = getMeta('og:image') || 'https://via.placeholder.com/512';
-                const appLogo = formatImageUrl(rawLogo);
-                const shortDesc = getMeta('og:description') || 'Download ' + appName + ' latest version for Android.';
-                
-                const developer = doc.querySelector('div.V8313d')?.innerText || doc.querySelector('a[href*="developer"] span')?.innerText || 'Verified Developer';
-                const rating = doc.querySelector('div.TT9eB')?.innerText || '4.5';
-                const installs = doc.querySelector('div.Cl29C')?.innerText || '100,000+';
-                const category = doc.querySelector('a[itemprop="genre"] span')?.innerText || 'Application';
-                const appSize = manualSize || 'Varies with device';
-
-                // Extract Screenshots
-                const imgElements = Array.from(doc.querySelectorAll('img[src*="ggpht.com"], img[src*="googleusercontent.com"]'));
-                let screenshots = imgElements
-                    .map(img => img.src)
-                    .filter(src => !src.includes('sz=s') && !src.includes('lh3.googleusercontent.com/a'))
-                    .slice(0, 4)
-                    .map(s => formatImageUrl(s));
-
-                if (screenshots.length === 0) {
-                    screenshots = [appLogo];
-                }
-
-                // Update Preview UI
-                document.getElementById('appName').innerText = appName;
-                document.getElementById('appDeveloper').innerText = `Developer: ${developer}`;
-                document.getElementById('appCategory').innerText = category;
-                document.getElementById('appLogo').src = appLogo;
-                document.getElementById('appRating').querySelector('span').innerText = rating;
-                document.getElementById('appInstalls').querySelector('span').innerText = installs;
-
-                // Generate Appiki AdSense Friendly Post Code
-                const bloggerCode = generateAppikiBloggerHTML({
-                    appName,
-                    appLogo,
-                    developer,
-                    category,
-                    rating,
-                    installs,
-                    appSize,
-                    shortDesc,
-                    customLink,
-                    screenshots,
-                    packageName
-                });
-
-                document.getElementById('bloggerHtmlOutput').value = bloggerCode;
-                document.getElementById('loading').classList.add('hidden');
-                document.getElementById('resultSection').classList.remove('hidden');
-
             } catch (err) {
-                console.error(err);
-                alert('Failed to fetch details. Please verify the package ID or check network connection.');
-                document.getElementById('loading').classList.add('hidden');
+                console.warn('Fallback triggered:', err);
             }
+
+            // Image URL Formatter to bypass Blogger referrer restrictions
+            const formatImg = (url) => {
+                if (!url) return 'https://via.placeholder.com/512';
+                if (url.startsWith('//')) url = 'https:' + url;
+                return `https://wsrv.nl/?url=${encodeURIComponent(url)}`;
+            };
+
+            appLogo = formatImg(appLogo);
+            screenshots = screenshots.map(s => formatImg(s));
+            if (screenshots.length === 0) screenshots = [appLogo];
+
+            const appSize = manualSize || 'Varies with device';
+
+            // UI Update
+            document.getElementById('appName').innerText = appName || packageName;
+            document.getElementById('appDeveloper').innerText = `Developer: ${developer}`;
+            document.getElementById('appCategory').innerText = category;
+            document.getElementById('appLogo').src = appLogo;
+            document.getElementById('appRating').querySelector('span').innerText = rating;
+            document.getElementById('appInstalls').querySelector('span').innerText = installs;
+
+            // Generate Appiki Post Code
+            const bloggerCode = generateAppikiBloggerHTML({
+                appName: appName || packageName,
+                appLogo,
+                developer,
+                category,
+                rating,
+                installs,
+                appSize,
+                shortDesc: shortDesc || `Download ${appName} APK latest version for Android.`,
+                customLink,
+                screenshots,
+                packageName
+            });
+
+            document.getElementById('bloggerHtmlOutput').value = bloggerCode;
+            document.getElementById('loading').classList.add('hidden');
+            document.getElementById('resultSection').classList.remove('hidden');
         }
 
         function generateAppikiBloggerHTML(data) {
@@ -237,11 +223,8 @@
 
 <h2>About ${data.appName}</h2>
 <p style="font-size:16px; line-height:1.6; color:#334155;">${data.shortDesc}</p>
-<p style="font-size:15px; line-height:1.6; color:#334155;">
-    ${data.appName} is one of the most popular applications in the ${data.category} category. Developed by ${data.developer}, this application provides top-notch features, security, and smooth user performance across all supported Android devices.
-</p>
 
-<!-- Detailed Specifications Table -->
+<!-- Specifications Table -->
 <h3 style="margin-top:30px;">Application Specifications</h3>
 <table style="width:100%; border-collapse:collapse; margin-top:10px; font-size:14px;">
     <tbody>
@@ -250,36 +233,26 @@
         <tr style="background:#f1f5f9;"><td style="padding:10px; font-weight:bold; border:1px solid #cbd5e1;">Developer</td><td style="padding:10px; border:1px solid #cbd5e1;">${data.developer}</td></tr>
         <tr><td style="padding:10px; font-weight:bold; border:1px solid #cbd5e1;">Category</td><td style="padding:10px; border:1px solid #cbd5e1;">${data.category}</td></tr>
         <tr style="background:#f1f5f9;"><td style="padding:10px; font-weight:bold; border:1px solid #cbd5e1;">File Size</td><td style="padding:10px; border:1px solid #cbd5e1;">${data.appSize}</td></tr>
-        <tr><td style="padding:10px; font-weight:bold; border:1px solid #cbd5e1;">Requires Android</td><td style="padding:10px; border:1px solid #cbd5e1;">5.0 and up</td></tr>
-        <tr style="background:#f1f5f9;"><td style="padding:10px; font-weight:bold; border:1px solid #cbd5e1;">Updated Date</td><td style="padding:10px; border:1px solid #cbd5e1;">${today}</td></tr>
+        <tr><td style="padding:10px; font-weight:bold; border:1px solid #cbd5e1;">Updated Date</td><td style="padding:10px; border:1px solid #cbd5e1;">${today}</td></tr>
     </tbody>
 </table>
 
-<!-- App Screenshots Preview -->
+<!-- Screenshots -->
 <h3 style="margin-top:30px;">Screenshots & Interface Preview</h3>
 <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:12px; margin-top:15px;">
     ${data.screenshots.map(s => `<img src="${s}" alt="${data.appName} Screenshot" style="width:100%; border-radius:8px; border:1px solid #e2e8f0; object-fit:cover;">`).join('\n    ')}
 </div>
 
-<!-- AdSense Placement 2: Mid-Article Ad Slot -->
+<!-- AdSense Placement 2 -->
 <div class="adsense-mid-slot" style="text-align:center; margin:30px 0;">
     <!-- Paste Google AdSense In-Article Ad Code Here -->
 </div>
 
-<!-- Key Features Section -->
-<h3>Key Features of ${data.appName}</h3>
-<ul style="line-height:1.8; color:#334155;">
-    <li><strong>User-Friendly Interface:</strong> Clean and responsive UI designed for optimal performance on Android smartphones.</li>
-    <li><strong>High Performance:</strong> Optimized resource management ensuring smooth functionality without heavy battery drain.</li>
-    <li><strong>Regular Updates:</strong> Continuous feature enhancements and security patches maintained by ${data.developer}.</li>
-    <li><strong>Safe & Secure:</strong> Free from harmful malware, fully verified for safety and user privacy protection.</li>
-</ul>
-
-<!-- Appiki Animated Download Button with 5s Timer -->
+<!-- Download Widget with 5s Timer -->
 <div style="text-align:center; margin:40px 0; padding:25px; background:#f8fafc; border-radius:16px; border:1px solid #e2e8f0;">
     <h4 style="margin:0 0 15px 0; color:#0f172a; font-size:18px;">Download ${data.appName} APK</h4>
     
-    <button id="timerBtn" onclick="startDownloadTimer()" style="background:#2563eb; color:#ffffff; padding:16px 36px; border-radius:50px; font-size:18px; font-weight:bold; border:none; cursor:pointer; box-shadow:0 10px 15px -3px rgba(37,99,235,0.3); transition:transform 0.2s ease, background 0.2s ease;" onmouseover="this.style.transform='scale(1.03)'" onmouseout="this.style.transform='scale(1)'">
+    <button id="timerBtn" onclick="startDownloadTimer()" style="background:#2563eb; color:#ffffff; padding:16px 36px; border-radius:50px; font-size:18px; font-weight:bold; border:none; cursor:pointer; box-shadow:0 10px 15px -3px rgba(37,99,235,0.3); transition:transform 0.2s ease;" onmouseover="this.style.transform='scale(1.03)'" onmouseout="this.style.transform='scale(1)'">
         📥 Download File
     </button>
 
@@ -292,7 +265,6 @@
             🚀 Download Now (${data.appSize})
         </a>
     </div>
-    <p style="font-size:12px; color:#64748b; margin-top:10px;">Fast, Direct & Secure Download Link</p>
 </div>
 
 <script>
